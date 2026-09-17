@@ -1,6 +1,5 @@
 """
 Simulador de Ponto de Corte — Antifraude Financiamento Veicular
-Projeto: Pós em Análise de Dados e IA (CESAR School / Neurotech)
 
 Este app NÃO executa o modelo XGBoost. Ele lê uma tabela cumulativa
 já extraída do TESTE_OOT (lookup_table.csv) e faz a matemática das
