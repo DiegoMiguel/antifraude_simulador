@@ -7,7 +7,6 @@ já extraída do TESTE_OOT (lookup_table.csv) e faz a matemática das
 """
 
 import pandas as pd
-import numpy as np
 import streamlit as st
 import plotly.graph_objects as go
 
@@ -121,6 +120,36 @@ h1, h2, h3 {
 .badge-green { background: rgba(0, 255, 135, 0.15); color: var(--accent-green); }
 .badge-red { background: rgba(255, 59, 48, 0.15); color: var(--accent-red); }
 
+/* --- Faixa colorida das 3 zonas (acompanha o slider abaixo) --- */
+.zone-bar {
+    display: flex;
+    width: 100%;
+    height: 16px;
+    border-radius: 8px;
+    overflow: hidden;
+    margin-bottom: 2px;
+    border: 1px solid var(--border-subtle);
+}
+.zone-seg { height: 100%; }
+.zone-aprovar { background: var(--accent-green); }
+.zone-mesa { background: var(--accent-violet); }
+.zone-bloquear { background: var(--accent-red); }
+
+.zone-labels {
+    display: flex;
+    justify-content: space-between;
+    font-size: 11px;
+    color: var(--text-secondary);
+    margin-bottom: 14px;
+    font-weight: 600;
+}
+
+/* Deixa o slider nativo do Streamlit "colado" na faixa colorida acima,
+   dando a leitura visual de um único controle. */
+div[data-testid="stSlider"] {
+    margin-top: -6px;
+}
+
 hr { border-color: var(--border-subtle); }
 </style>
 """
@@ -139,27 +168,27 @@ TOTAL_BOM = 15533
 
 # ---------------------------------------------------------------------------
 # CARREGAMENTO DA LOOKUP TABLE (gerada no Colab a partir do TESTE_OOT)
+# Chave em PORCENTAGEM (inteiro, 0 a 100, passo 2) para evitar qualquer
+# problema de comparação de números quebrados (float).
 # ---------------------------------------------------------------------------
 @st.cache_data
 def carregar_lookup():
     df = pd.read_csv("lookup_table.csv")
-    df["threshold"] = df["threshold"].round(2)
-    return df
+    df["pct"] = (df["threshold"] * 100).round().astype(int)
+    lookup = {
+        int(row["pct"]): (int(row["fraude_score_maior_igual"]), int(row["bom_score_maior_igual"]))
+        for _, row in df.iterrows()
+    }
+    return lookup
 
 
-df_lookup = carregar_lookup()
-THRESHOLDS = df_lookup["threshold"].tolist()
+LOOKUP = carregar_lookup()
+PERCENTUAIS_DISPONIVEIS = sorted(LOOKUP.keys())  # 0, 2, 4, ..., 100
 
 
-def contagem_em(t: float):
-    """Retorna (fraude_score>=t, bom_score>=t) buscando na lookup table."""
-    linha = df_lookup.loc[df_lookup["threshold"] == round(t, 2)]
-    return int(linha["fraude_score_maior_igual"].values[0]), int(linha["bom_score_maior_igual"].values[0])
-
-
-def calcular_zonas(li: float, ls: float, custo_mesa: float):
-    f_li, b_li = contagem_em(li)
-    f_ls, b_ls = contagem_em(ls)
+def calcular_zonas(li_pct: int, ls_pct: int, custo_mesa: float):
+    f_li, b_li = LOOKUP[li_pct]
+    f_ls, b_ls = LOOKUP[ls_pct]
 
     vp_bloq = f_ls
     fp_bloq = b_ls
@@ -198,21 +227,46 @@ def fmt_reais(v: float) -> str:
 with st.sidebar:
     st.markdown('<p class="subtitle">Parametrização do Modelo</p>', unsafe_allow_html=True)
     st.title("🛡️ Painel de Controle")
-    st.markdown("Ajuste os pontos de corte e o custo operacional para simular o impacto financeiro em tempo real.")
+    st.markdown(
+        "Ajuste a faixa de decisão e o custo operacional para simular o impacto "
+        "financeiro em tempo real."
+    )
     st.markdown("---")
 
-    limite_inferior = st.select_slider(
-        "Limite inferior — abaixo disso, aprova automático",
-        options=THRESHOLDS,
-        value=0.20,
+    st.markdown('<p class="subtitle">Faixa de Decisão</p>', unsafe_allow_html=True)
+
+    # --- Faixa colorida das 3 zonas, alinhada ao slider único abaixo ---
+    limite_inferior_pct, limite_superior_pct = st.session_state.get(
+        "faixa_decisao", (20, 50)
+    )
+    st.markdown(
+        f"""
+        <div class="zone-bar">
+            <div class="zone-seg zone-aprovar" style="width:{limite_inferior_pct}%;"></div>
+            <div class="zone-seg zone-mesa" style="width:{limite_superior_pct - limite_inferior_pct}%;"></div>
+            <div class="zone-seg zone-bloquear" style="width:{100 - limite_superior_pct}%;"></div>
+        </div>
+        <div class="zone-labels">
+            <span>Aprovar</span><span>Mesa</span><span>Bloquear</span>
+        </div>
+        """,
+        unsafe_allow_html=True,
     )
 
-    ls_opcoes = [t for t in THRESHOLDS if t > limite_inferior]
-    valor_default_ls = 0.50 if 0.50 in ls_opcoes else ls_opcoes[len(ls_opcoes) // 2]
-    limite_superior = st.select_slider(
-        "Limite superior — acima disso, bloqueia automático",
-        options=ls_opcoes,
-        value=valor_default_ls,
+    limite_inferior_pct, limite_superior_pct = st.slider(
+        "Um único controle, dois limites — arraste cada ponta:",
+        min_value=0,
+        max_value=100,
+        value=(limite_inferior_pct, limite_superior_pct),
+        step=2,
+        format="%d%%",
+        key="faixa_decisao",
+    )
+
+    st.caption(
+        f"🟢 Aprovar automático: 0% – {limite_inferior_pct}%  ·  "
+        f"🟣 Mesa de análise: {limite_inferior_pct}% – {limite_superior_pct}%  ·  "
+        f"🔴 Bloquear automático: {limite_superior_pct}% – 100%"
     )
 
     st.markdown("---")
@@ -229,7 +283,7 @@ with st.sidebar:
 # ---------------------------------------------------------------------------
 # CÁLCULO
 # ---------------------------------------------------------------------------
-r = calcular_zonas(limite_inferior, limite_superior, custo_mesa)
+r = calcular_zonas(limite_inferior_pct, limite_superior_pct, custo_mesa)
 
 # ---------------------------------------------------------------------------
 # CABEÇALHO
@@ -237,9 +291,9 @@ r = calcular_zonas(limite_inferior, limite_superior, custo_mesa)
 st.markdown('<p class="subtitle">Frente C · Estratégia de Decisão</p>', unsafe_allow_html=True)
 st.title("Simulador de Ponto de Corte — Impacto em R$")
 st.markdown(
-    f'Zona atual: <span class="badge badge-green">Aprovar &lt; {limite_inferior:.2f}</span> '
-    f'&nbsp; <span class="badge" style="background:rgba(168,85,247,0.15);color:#A855F7;">Mesa {limite_inferior:.2f}–{limite_superior:.2f}</span> '
-    f'&nbsp; <span class="badge badge-red">Bloquear ≥ {limite_superior:.2f}</span>',
+    f'Zona atual: <span class="badge badge-green">Aprovar &lt; {limite_inferior_pct}%</span> '
+    f'&nbsp; <span class="badge" style="background:rgba(168,85,247,0.15);color:#A855F7;">Mesa {limite_inferior_pct}%–{limite_superior_pct}%</span> '
+    f'&nbsp; <span class="badge badge-red">Bloquear ≥ {limite_superior_pct}%</span>',
     unsafe_allow_html=True,
 )
 st.markdown("---")
@@ -297,17 +351,19 @@ st.markdown(f"""
 st.markdown("---")
 
 # ---------------------------------------------------------------------------
-# GRÁFICO — RESULTADO LÍQUIDO EM FUNÇÃO DO LIMITE SUPERIOR
+# GRÁFICO — RESULTADO LÍQUIDO EM FUNÇÃO DO LIMITE SUPERIOR (%)
 # ---------------------------------------------------------------------------
-st.subheader("Resultado Líquido vs. Limite Superior")
-st.caption(f"Limite inferior fixo em {limite_inferior:.2f} — variando o limite superior de bloqueio.")
+st.subheader("Resultado Líquido vs. Limite Superior (%)")
+st.caption(f"Limite inferior fixo em {limite_inferior_pct}% — variando o limite superior de bloqueio.")
 
-thresholds_validos = [t for t in THRESHOLDS if t > limite_inferior]
-resultados_curva = [calcular_zonas(limite_inferior, t, custo_mesa)["resultado_liquido"] for t in thresholds_validos]
+percentuais_validos = [p for p in PERCENTUAIS_DISPONIVEIS if p > limite_inferior_pct]
+resultados_curva = [
+    calcular_zonas(limite_inferior_pct, p, custo_mesa)["resultado_liquido"] for p in percentuais_validos
+]
 
 fig = go.Figure()
 fig.add_trace(go.Scatter(
-    x=thresholds_validos, y=resultados_curva,
+    x=percentuais_validos, y=resultados_curva,
     mode="lines",
     line=dict(color="#00E5FF", width=3),
     fill="tozeroy",
@@ -315,7 +371,7 @@ fig.add_trace(go.Scatter(
     name="Resultado Líquido",
 ))
 fig.add_trace(go.Scatter(
-    x=[limite_superior], y=[r["resultado_liquido"]],
+    x=[limite_superior_pct], y=[r["resultado_liquido"]],
     mode="markers",
     marker=dict(color="#A855F7", size=14, line=dict(color="#FFFFFF", width=2)),
     name="Ponto atual",
@@ -324,7 +380,7 @@ fig.update_layout(
     plot_bgcolor="#131B2E",
     paper_bgcolor="rgba(0,0,0,0)",
     font=dict(color="#8E9BAE", family="Inter"),
-    xaxis=dict(title="Limite superior (threshold de bloqueio)", gridcolor="rgba(255,255,255,0.06)"),
+    xaxis=dict(title="Limite superior (%)", gridcolor="rgba(255,255,255,0.06)", ticksuffix="%"),
     yaxis=dict(title="Resultado líquido (R$)", gridcolor="rgba(255,255,255,0.06)"),
     margin=dict(l=10, r=10, t=10, b=10),
     height=380,
