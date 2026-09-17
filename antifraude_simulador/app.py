@@ -6,9 +6,16 @@ já extraída do TESTE_OOT (lookup_table.csv) e faz a matemática das
 3 zonas de decisão (aprovar / mesa de análise / bloquear) em R$.
 """
 
+import os
 import pandas as pd
 import streamlit as st
 import plotly.graph_objects as go
+
+# Caminho absoluto baseado na localização deste arquivo — evita o
+# FileNotFoundError que acontece quando o diretório de execução (cwd)
+# não é o mesmo diretório onde o app.py está (comum no Streamlit Cloud
+# quando o app fica dentro de uma subpasta do repositório).
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # ---------------------------------------------------------------------------
 # CONFIGURAÇÃO DA PÁGINA
@@ -173,7 +180,7 @@ TOTAL_BOM = 15533
 # ---------------------------------------------------------------------------
 @st.cache_data
 def carregar_lookup():
-    df = pd.read_csv("lookup_table.csv")
+    df = pd.read_csv(os.path.join(BASE_DIR, "lookup_table.csv"))
     df["pct"] = (df["threshold"] * 100).round().astype(int)
     lookup = {
         int(row["pct"]): (int(row["fraude_score_maior_igual"]), int(row["bom_score_maior_igual"]))
